@@ -76,14 +76,15 @@ SUPPORTED_BEDROCK_EMBEDDING_MODELS = {
 ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
-def list_bedrock_models_by_type(model_type: str = "TEXT") -> dict:
+def list_bedrock_models_by_type(model_type: str | None = None) -> dict:
     """Generic function to list Bedrock models by output modality type.
     
     Args:
-        model_type: Output modality type ("TEXT", "EMBEDDING", "IMAGE")
+        model_type: Output modality type ("TEXT", "EMBEDDING", "IMAGE"). 
+                   If None, returns all models irrespective of modalities.
     
     Returns:
-        Dictionary of models filtered by the specified type
+        Dictionary of models filtered by the specified type or all models if no type specified
     """
     model_list = {}
     try:
@@ -92,25 +93,46 @@ def list_bedrock_models_by_type(model_type: str = "TEXT") -> dict:
             response = bedrock_client.list_inference_profiles(maxResults=1000, typeEquals="SYSTEM_DEFINED")
             profile_list = [p["inferenceProfileId"] for p in response["inferenceProfileSummaries"]]
         
-        # List foundation models by output modality
-        response = bedrock_client.list_foundation_models(byOutputModality=model_type)
+        # List foundation models by output modality or all models
+        if model_type:
+            response = bedrock_client.list_foundation_models(byOutputModality=model_type)
+        else:
+            # Get all models without filtering by output modality
+            response = bedrock_client.list_foundation_models()
         
         for model in response["modelSummaries"]:
             model_id = model.get("modelId", "N/A")
             status = model["modelLifecycle"].get("status", "ACTIVE")
+            output_modalities = model.get("outputModalities", [])
             
-            # For text models, check streaming support; for embeddings, skip this check
+            # Apply filtering logic based on model type or output modalities
+            should_skip = False
+            
             if model_type == "TEXT":
+                # For text models, check streaming support
                 stream_supported = model.get("responseStreamingSupported", True)
                 if not stream_supported or status not in ["ACTIVE", "LEGACY"]:
-                    continue
-            else:
+                    should_skip = True
+            elif model_type:
+                # For specific non-text model types (EMBEDDING, IMAGE)
                 if status not in ["ACTIVE", "LEGACY"]:
-                    continue
+                    should_skip = True
+            else:
+                # For all models, apply general filtering
+                # Skip models that are not active/legacy or are rerank models
+                if status not in ["ACTIVE", "LEGACY"]:
+                    should_skip = True
+                # For text models without specific filtering, still check streaming
+                elif "TEXT" in output_modalities:
+                    stream_supported = model.get("responseStreamingSupported", True)
+                    if not stream_supported:
+                        should_skip = True
+            
+            if should_skip:
+                continue
             
             inference_types = model.get("inferenceTypesSupported", [])
             input_modalities = model["inputModalities"]
-            output_modalities = model["outputModalities"]
             
             model_info = {
                 "modalities": input_modalities,
@@ -118,11 +140,15 @@ def list_bedrock_models_by_type(model_type: str = "TEXT") -> dict:
             }
             
             # Add additional info for embedding models
-            if model_type == "EMBEDDING":
+            if "EMBEDDING" in output_modalities:
                 if "embeddingDimensions" in model:
                     model_info["embedding_dimensions"] = model["embeddingDimensions"]
                 if "maxInputLength" in model:
                     model_info["max_input_length"] = model["maxInputLength"]
+            
+            # Add model type indicator for easier identification when getting all models
+            if not model_type:
+                model_info["primary_output_type"] = output_modalities[0] if output_modalities else "UNKNOWN"
             
             # Add on-demand model
             if "ON_DEMAND" in inference_types:
@@ -134,20 +160,20 @@ def list_bedrock_models_by_type(model_type: str = "TEXT") -> dict:
                 model_list[profile_id] = model_info.copy()
                 
     except Exception as e:
-        logger.error(f"Unable to list {model_type.lower()} models: {str(e)}")
+        logger.error(f"Unable to list {model_type.lower() if model_type else 'all'} models: {str(e)}")
     
     return model_list
 
 
-# Initialize the model list.
-bedrock_model_list = list_bedrock_models_by_type(model_type="EMBEDDING")
+# Initialize the model list. By Default ALL models will be listed
+bedrock_model_list = list_bedrock_models_by_type()
 
 
 class BedrockModel(BaseChatModel):
-    def list_models(self) -> list[str]:
+    def list_models(self, model_type: str | None = None) -> list[str]:
         """Always refresh the latest model list"""
         global bedrock_model_list
-        bedrock_model_list = list_bedrock_models_by_type(model_type="EMBEDDING")
+        bedrock_model_list = list_bedrock_models_by_type(model_type=model_type)
         return list(bedrock_model_list.keys())
 
     def validate(self, chat_request: ChatRequest):
