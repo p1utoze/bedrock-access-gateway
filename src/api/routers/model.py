@@ -10,7 +10,7 @@ from enum import Enum
 
 router = APIRouter(
     prefix="/models",
-    # dependencies=[Depends(api_key_auth)],
+    dependencies=[Depends(api_key_auth)],
     # responses={404: {"description": "Not found"}},
 )
 
