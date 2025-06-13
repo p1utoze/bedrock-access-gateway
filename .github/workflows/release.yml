@@ -12,8 +12,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    env:
-      iam_role_to_assume: ${{ secrets.ROLE_ARN }}
     steps:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
