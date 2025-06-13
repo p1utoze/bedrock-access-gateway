@@ -76,63 +76,78 @@ SUPPORTED_BEDROCK_EMBEDDING_MODELS = {
 ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
-def list_bedrock_models() -> dict:
-    """Automatically getting a list of supported models.
-
-    Returns a model list combines:
-        - ON_DEMAND models.
-        - Cross-Region Inference Profiles (if enabled via Env)
+def list_bedrock_models_by_type(model_type: str = "TEXT") -> dict:
+    """Generic function to list Bedrock models by output modality type.
+    
+    Args:
+        model_type: Output modality type ("TEXT", "EMBEDDING", "IMAGE")
+    
+    Returns:
+        Dictionary of models filtered by the specified type
     """
     model_list = {}
     try:
         profile_list = []
         if ENABLE_CROSS_REGION_INFERENCE:
-            # List system defined inference profile IDs
             response = bedrock_client.list_inference_profiles(maxResults=1000, typeEquals="SYSTEM_DEFINED")
             profile_list = [p["inferenceProfileId"] for p in response["inferenceProfileSummaries"]]
-
-        # List foundation models, only cares about text outputs here.
-        response = bedrock_client.list_foundation_models(byOutputModality="TEXT")
-
+        
+        # List foundation models by output modality
+        response = bedrock_client.list_foundation_models(byOutputModality=model_type)
+        
         for model in response["modelSummaries"]:
             model_id = model.get("modelId", "N/A")
-            stream_supported = model.get("responseStreamingSupported", True)
             status = model["modelLifecycle"].get("status", "ACTIVE")
-
-            # currently, use this to filter out rerank models and legacy models
-            if not stream_supported or status not in ["ACTIVE", "LEGACY"]:
-                continue
-
+            
+            # For text models, check streaming support; for embeddings, skip this check
+            if model_type == "TEXT":
+                stream_supported = model.get("responseStreamingSupported", True)
+                if not stream_supported or status not in ["ACTIVE", "LEGACY"]:
+                    continue
+            else:
+                if status not in ["ACTIVE", "LEGACY"]:
+                    continue
+            
             inference_types = model.get("inferenceTypesSupported", [])
             input_modalities = model["inputModalities"]
-            # Add on-demand model list
+            output_modalities = model["outputModalities"]
+            
+            model_info = {
+                "modalities": input_modalities,
+                "output_modalities": output_modalities
+            }
+            
+            # Add additional info for embedding models
+            if model_type == "EMBEDDING":
+                if "embeddingDimensions" in model:
+                    model_info["embedding_dimensions"] = model["embeddingDimensions"]
+                if "maxInputLength" in model:
+                    model_info["max_input_length"] = model["maxInputLength"]
+            
+            # Add on-demand model
             if "ON_DEMAND" in inference_types:
-                model_list[model_id] = {"modalities": input_modalities}
-
-            # Add cross-region inference model list.
+                model_list[model_id] = model_info.copy()
+            
+            # Add cross-region inference model
             profile_id = cr_inference_prefix + "." + model_id
             if profile_id in profile_list:
-                model_list[profile_id] = {"modalities": input_modalities}
-
+                model_list[profile_id] = model_info.copy()
+                
     except Exception as e:
-        logger.error(f"Unable to list models: {str(e)}")
-
-    if not model_list:
-        # In case stack not updated.
-        model_list[DEFAULT_MODEL] = {"modalities": ["TEXT", "IMAGE"]}
-
+        logger.error(f"Unable to list {model_type.lower()} models: {str(e)}")
+    
     return model_list
 
 
 # Initialize the model list.
-bedrock_model_list = list_bedrock_models()
+bedrock_model_list = list_bedrock_models_by_type(model_type="EMBEDDING")
 
 
 class BedrockModel(BaseChatModel):
     def list_models(self) -> list[str]:
         """Always refresh the latest model list"""
         global bedrock_model_list
-        bedrock_model_list = list_bedrock_models()
+        bedrock_model_list = list_bedrock_models_by_type(model_type="EMBEDDING")
         return list(bedrock_model_list.keys())
 
     def validate(self, chat_request: ChatRequest):
