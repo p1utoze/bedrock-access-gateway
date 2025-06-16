@@ -24,7 +24,7 @@ build_and_push_images() {
         for ARCH in "${ARCHS[@]}"
         do
             # Build multi-architecture Docker image
-            docker buildx build --platform linux/$ARCH -t $IMAGE_NAME:$TAG-$ARCH -f $DOCKERFILE_PATH --load ../src/
+            docker buildx build --platform linux/$ARCH -t $IMAGE_NAME:$TAG-$ARCH -f $DOCKERFILE_PATH --push ../src/
         done
     else
         # Build single architecture Docker image
@@ -55,9 +55,10 @@ build_and_push_images() {
                 # Push the image to ECR
                 docker push $REPOSITORY_URI:$TAG-$ARCH
                 # Create a manifest for the image
-                docker manifest create $REPOSITORY_URI:$TAG $REPOSITORY_URI:$TAG-$ARCH --amend
+                docker manifest create $REPOSITORY_URI:$TAG --amend $REPOSITORY_URI:$TAG-arm64 $REPOSITORY_URI:$TAG-amd64
                 # Annotate the manifest with architecture information
-                docker manifest annotate $REPOSITORY_URI:$TAG "$REPOSITORY_URI:$TAG-$ARCH" --os linux --arch $ARCH
+                docker manifest annotate $REPOSITORY_URI:$TAG $REPOSITORY_URI:$TAG-arm64 --os linux --arch arm64
+                docker manifest annotate $REPOSITORY_URI:$TAG $REPOSITORY_URI:$TAG-amd64 --os linux --arch amd64
             done
 
             # Push the manifest to ECR
